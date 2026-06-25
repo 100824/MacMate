@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Swift / SPM
+.build/
+.swiftpm/
+Package.resolved
+*.xcworkspace/
+*.xcodeproj/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Cache
+.cache/
+
+# Build artifacts
+build/
+dist/
+*.dmg
+*.zip
+
+# Logs
+*.log
+
+# Test coverage
+*.xccovreport
+*.xccovarchive
