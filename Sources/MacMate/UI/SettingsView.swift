@@ -607,7 +607,7 @@ private struct SettingsTextField: View {
         .padding(.vertical, 6)
         .frame(height: 32)
         .background(
-            Color(nsColor: .textBackgroundColor)
+            Design.cardBackground
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(Design.warmBorder.opacity(1.5), lineWidth: 1)

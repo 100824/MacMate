@@ -58,6 +58,11 @@ final class SelectionMonitor {
         activationObserver = nil
     }
 
+    func restart() {
+        stop()
+        start()
+    }
+
     func showCurrentSelection() {
         permissions.refresh()
         guard permissions.accessibilityTrusted else { return }

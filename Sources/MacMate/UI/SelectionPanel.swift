@@ -84,18 +84,28 @@ final class SelectionPanelController {
     private func computePanelSize() -> NSSize {
         let hasPronunciation = !viewModel.pronunciationText.isEmpty
         let chromeHeight: CGFloat = hasPronunciation ? 192 : 140
-        let textCount = viewModel.resultText.count
+        let text = viewModel.resultText
 
         let contentHeight: CGFloat
         if viewModel.isLoading {
             contentHeight = 90
         } else if !viewModel.errorMessage.isEmpty {
             contentHeight = 70
-        } else if textCount == 0 {
+        } else if text.isEmpty {
             contentHeight = 90
         } else {
-            let lines = max(1, ceil(CGFloat(textCount) / 50.0))
-            let estimated = lines * 18 + 30
+            // 混合文本宽度估算：中文字符按 2 倍宽度，ASCII 按 1 倍
+            let mixedWidth = text.reduce(0) { sum, char in
+                sum + (char.isASCII ? 1 : 2)
+            }
+            let lines = max(1, ceil(CGFloat(mixedWidth) / 50.0))
+            // 增加 Markdown heading 额外行数（heading 字号更大，占用更多空间）
+            let headingCount = text.components(separatedBy: .newlines).filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return trimmed.hasPrefix("#") && trimmed.dropFirst().hasPrefix(" ")
+            }.count
+            let totalLines = lines + CGFloat(headingCount)
+            let estimated = totalLines * 20 + 40
             contentHeight = min(estimated, Self.resultMaxHeight - chromeHeight)
         }
 
@@ -132,6 +142,7 @@ final class SelectionPanelController {
     }
 
     /// 计算面板的最佳位置：优先放在选区下方，空间不足放到上方，仍不足则垂直居中。
+    /// 水平方向：优先居中，超出屏幕时智能反向放置。
     private static func bestPosition(
         size: NSSize, anchor: CGRect, visible: NSRect,
         anchorCenterX: CGFloat,
@@ -151,13 +162,20 @@ final class SelectionPanelController {
             // 都不行，垂直居中
             y = visible.minY + (visible.height - size.height) / 2
         }
+        y = max(visible.minY + 8, min(y, visible.maxY - size.height - 8))
 
-        // 水平居中于锚点，两端留 8pt 边距
+        // 水平方向：优先居中，超出时智能反向放置
         var x = anchorCenterX - size.width / 2
+        if x < visible.minX + 8 {
+            // 面板左侧超出屏幕，尝试放在锚点右侧
+            x = anchorCenterX + 12
+        } else if x + size.width > visible.maxX - 8 {
+            // 面板右侧超出屏幕，尝试放在锚点左侧
+            x = anchorCenterX - size.width - 12
+        }
+        // 确保在可见区域内
         x = max(visible.minX + 8, min(x, visible.maxX - size.width - 8))
 
-        // 最后确保完全在可见区域内
-        y = max(visible.minY + 8, min(y, visible.maxY - size.height - 8))
         return CGPoint(x: x, y: y)
     }
 
@@ -571,6 +589,8 @@ private enum MarkdownBlock {
         var paragraph: [String] = []
         var codeLines: [String] = []
         var inCode = false
+        var inIndentCode = false
+        var quoteLines: [String] = []
 
         func flushParagraph() {
             guard !paragraph.isEmpty else { return }
@@ -578,14 +598,23 @@ private enum MarkdownBlock {
             paragraph.removeAll()
         }
 
+        func flushQuote() {
+            guard !quoteLines.isEmpty else { return }
+            result.append(.quote(quoteLines.joined(separator: "\n")))
+            quoteLines.removeAll()
+        }
+
         for rawLine in markdown.components(separatedBy: .newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
+
+            // Fenced code block
             if line.hasPrefix("```") {
                 if inCode {
                     result.append(.code(codeLines.joined(separator: "\n")))
                     codeLines.removeAll()
                 } else {
                     flushParagraph()
+                    flushQuote()
                 }
                 inCode.toggle()
                 continue
@@ -594,30 +623,58 @@ private enum MarkdownBlock {
                 codeLines.append(rawLine)
                 continue
             }
+
+            // Indented code block (4 spaces or tab)
+            if rawLine.hasPrefix("    ") || rawLine.hasPrefix("\t") {
+                flushParagraph()
+                flushQuote()
+                if !inIndentCode {
+                    inIndentCode = true
+                }
+                codeLines.append(String(rawLine.dropFirst(rawLine.hasPrefix("    ") ? 4 : 1)))
+                continue
+            } else if inIndentCode {
+                if line.isEmpty {
+                    codeLines.append("")
+                    continue
+                } else {
+                    result.append(.code(codeLines.joined(separator: "\n")))
+                    codeLines.removeAll()
+                    inIndentCode = false
+                }
+            }
+
             if line.isEmpty {
                 flushParagraph()
+                flushQuote()
                 continue
             }
             if line == "---" || line == "***" || line == "___" {
                 flushParagraph()
+                flushQuote()
                 result.append(.rule)
                 continue
             }
             let hashes = line.prefix { $0 == "#" }.count
             if (1...6).contains(hashes), line.dropFirst(hashes).hasPrefix(" ") {
                 flushParagraph()
+                flushQuote()
                 result.append(.heading(hashes, String(line.dropFirst(hashes + 1))))
                 continue
             }
             if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
                 flushParagraph()
+                flushQuote()
                 result.append(.bullet(String(line.dropFirst(2))))
                 continue
             }
             if line.hasPrefix("> ") {
                 flushParagraph()
-                result.append(.quote(String(line.dropFirst(2))))
+                quoteLines.append(String(line.dropFirst(2)))
                 continue
+            }
+            if !quoteLines.isEmpty {
+                flushQuote()
             }
             if let period = line.firstIndex(of: "."),
                line[..<period].allSatisfy(\.isNumber),
@@ -631,6 +688,8 @@ private enum MarkdownBlock {
             paragraph.append(rawLine)
         }
         if inCode, !codeLines.isEmpty { result.append(.code(codeLines.joined(separator: "\n"))) }
+        if inIndentCode, !codeLines.isEmpty { result.append(.code(codeLines.joined(separator: "\n"))) }
+        flushQuote()
         flushParagraph()
         return result
     }

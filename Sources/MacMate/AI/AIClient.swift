@@ -82,6 +82,12 @@ struct AIClient: Sendable {
         self.usageLimiter = usageLimiter
     }
 
+    private func timeoutInterval(for text: String, isStream: Bool) -> TimeInterval {
+        let base: TimeInterval = isStream ? 120 : 60
+        let extra = Double(text.count) / 200.0
+        return base + extra
+    }
+
     func chat(
         configuration: AIConfiguration,
         systemPrompt: String,
@@ -93,7 +99,7 @@ struct AIClient: Sendable {
         let endpoint = try endpointURL(from: configuration.baseURL)
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 60
+        request.timeoutInterval = timeoutInterval(for: userText, isStream: false)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !configuration.apiKey.isEmpty {
             request.setValue("Bearer \(configuration.apiKey)", forHTTPHeaderField: "Authorization")
@@ -146,7 +152,7 @@ struct AIClient: Sendable {
                     let endpoint = try endpointURL(from: configuration.baseURL)
                     var request = URLRequest(url: endpoint)
                     request.httpMethod = "POST"
-                    request.timeoutInterval = 120
+                    request.timeoutInterval = self.timeoutInterval(for: userText, isStream: true)
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     if !configuration.apiKey.isEmpty {
                         request.setValue("Bearer \(configuration.apiKey)", forHTTPHeaderField: "Authorization")

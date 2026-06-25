@@ -38,7 +38,10 @@ final class SelectionViewModel: ObservableObject {
 
     @available(macOS 15.0, *)
     var systemTranslationCoordinator: SystemTranslationCoordinator {
-        systemTranslationStorage as! SystemTranslationCoordinator
+        guard let coordinator = systemTranslationStorage as? SystemTranslationCoordinator else {
+            fatalError("SystemTranslationCoordinator is not available on this OS version")
+        }
+        return coordinator
     }
 
     var exceedsInputLimit: Bool { selectedText.count > AppConstants.maximumInputCharacters }

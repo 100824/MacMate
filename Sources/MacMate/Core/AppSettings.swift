@@ -24,7 +24,11 @@ final class AppSettings: ObservableObject {
         applyPresetIfNeeded(from: oldValue)
     }}
     @Published var baseURL: String { didSet { defaults.set(baseURL, forKey: Key.baseURL) } }
-    @Published var apiKey: String { didSet { _ = CredentialsStore.writeAPIKey(apiKey) } }
+    @Published var apiKey: String { didSet {
+        if !CredentialsStore.writeAPIKey(apiKey) {
+            FileLogger.shared.error(.app, "api_key_save_failed")
+        }
+    }}
     @Published var model: String { didSet { defaults.set(model, forKey: Key.model) } }
     @Published var explanationPrompt: String { didSet { defaults.set(explanationPrompt, forKey: Key.explanationPrompt) } }
     @Published var speechRate: Double { didSet { defaults.set(speechRate, forKey: Key.speechRate) } }

@@ -8,25 +8,48 @@ struct IPAResult: Equatable {
 final class IPAService: @unchecked Sendable {
     static let shared = IPAService()
 
-    private let pronunciations: [String: [String]]
+    private var pronunciations: [String: [String]] = [:]
+    private let loadLock = NSLock()
+    private var isLoaded = false
     private let wordRegex = try! NSRegularExpression(pattern: #"[A-Za-z]+(?:'[A-Za-z]+)?"#)
 
-    init(dictionaryText: String? = nil) {
-        if let dictionaryText {
-            pronunciations = Self.parse(dictionaryText)
-        } else if let url = Bundle.main.url(forResource: "cmudict", withExtension: "dict")
-                    ?? Bundle.module.url(forResource: "cmudict", withExtension: "dict", subdirectory: "Pronunciation")
-                    ?? Bundle.module.url(forResource: "cmudict", withExtension: "dict"),
-                  let content = try? String(contentsOf: url, encoding: .utf8) {
-            pronunciations = Self.parse(content)
-            FileLogger.shared.info(.app, "pronunciation_dictionary_loaded entries=\(pronunciations.count)")
-        } else {
-            pronunciations = [:]
-            FileLogger.shared.error(.app, "pronunciation_dictionary_missing")
+    private init() {
+        // 在后台队列异步加载，避免阻塞主线程初始化
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.loadDictionary()
         }
     }
 
+    init(dictionaryText: String) {
+        pronunciations = Self.parse(dictionaryText)
+        isLoaded = true
+    }
+
+    private func loadDictionary() {
+        loadLock.lock()
+        defer { loadLock.unlock() }
+        guard !isLoaded else { return }
+
+        if let url = Bundle.main.url(forResource: "cmudict", withExtension: "dict")
+            ?? Bundle.module.url(forResource: "cmudict", withExtension: "dict", subdirectory: "Pronunciation")
+            ?? Bundle.module.url(forResource: "cmudict", withExtension: "dict"),
+           let content = try? String(contentsOf: url, encoding: .utf8) {
+            pronunciations = Self.parse(content)
+            FileLogger.shared.info(.app, "pronunciation_dictionary_loaded entries=\(pronunciations.count)")
+        } else {
+            FileLogger.shared.error(.app, "pronunciation_dictionary_missing")
+        }
+        isLoaded = true
+    }
+
     func transcribe(_ text: String) -> IPAResult {
+        // 确保词典已加载（如果后台加载还没完成，这里会同步等待加载）
+        if !isLoaded {
+            loadDictionary()
+        }
+
+        loadLock.lock()
+        defer { loadLock.unlock() }
         let nsText = text as NSString
         let matches = wordRegex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
         guard !matches.isEmpty else { return IPAResult(transcription: "", unknownWords: []) }

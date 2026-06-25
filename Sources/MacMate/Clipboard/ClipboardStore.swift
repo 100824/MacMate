@@ -85,7 +85,6 @@ final class ClipboardStore: ObservableObject {
         try? fileManager.createDirectory(at: rootDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try? fileManager.createDirectory(at: payloadDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     }
-
     private func load() {
         guard let data = try? Data(contentsOf: metadataURL),
               let decoded = try? JSONDecoder().decode([ClipboardEntry].self, from: data) else { return }
