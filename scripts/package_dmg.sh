@@ -9,6 +9,16 @@ DMG="$DIST/MacMate-1.0.0-arm64.dmg"
 BACKGROUND="$ROOT/build/dmg-background.png"
 TMP_SPARSE="$ROOT/build/MacMate-tmp"
 
+MOUNT_DEV=""
+MOUNT_POINT=""
+
+cleanup() {
+  if [[ -n "${MOUNT_DEV:-}" ]]; then
+    /usr/bin/hdiutil detach "$MOUNT_DEV" -force || true
+  fi
+}
+trap cleanup EXIT
+
 "$ROOT/scripts/build_app.sh"
 
 # Generate background image
@@ -49,34 +59,22 @@ sleep 1
 mkdir -p "$MOUNT_POINT/.background"
 /usr/bin/ditto "$BACKGROUND" "$MOUNT_POINT/.background/background.png"
 
-# Set Finder view via AppleScript
-/usr/bin/osascript <<EOF
-  set backgroundImage to POSIX file "$MOUNT_POINT/.background/background.png"
-  tell application "Finder"
-    tell disk "MacMate"
-      open
-      set current view of container window to icon view
-      set toolbar visible of container window to false
-      set statusbar visible of container window to false
-      set bounds of container window to {200, 100, 1020, 620}
-      set viewOptions to icon view options of container window
-      set arrangement of viewOptions to not arranged
-      set icon size of viewOptions to 96
-      set text size of viewOptions to 13
-      set background picture of viewOptions to backgroundImage
-      set position of item "MacMate.app" of container window to {210, 305}
-      set position of item "Applications" of container window to {610, 305}
-      update without registering applications
-      close
-    end tell
-  end tell
-EOF
+# 复制预先生成的 .DS_Store 以保留 DMG 窗口布局。
+# 该模板卷名固定为 "MacMate"、窗口 bounds {200,100,1020,620}、
+# 图标位置 {210,305} 与 {610,305}，与本脚本一致。
+DS_STORE_TEMPLATE="$ROOT/scripts/dmg-.DS_Store"
+if [[ -f "$DS_STORE_TEMPLATE" ]]; then
+  /usr/bin/ditto "$DS_STORE_TEMPLATE" "$MOUNT_POINT/.DS_Store"
+  echo "Copied pre-made .DS_Store"
+else
+  echo "Warning: $DS_STORE_TEMPLATE not found; DMG UI layout may not persist"
+fi
 
-# Ensure Finder writes .DS_Store
-sleep 2
+sleep 1
 
 # Unmount
 /usr/bin/hdiutil detach "$MOUNT_DEV" -force
+MOUNT_DEV=""
 
 # Convert to compressed read-only DMG
 rm -f "$DMG"

@@ -2,6 +2,7 @@
 .DS_Store
 .AppleDouble
 .LSOverride
+Icon?
 
 # Swift / SPM
 .build/
@@ -14,6 +15,8 @@ Package.resolved
 .vscode/
 .idea/
 *.iml
+xcuserdata/
+DerivedData/
 
 # Cache
 .cache/
@@ -30,3 +33,10 @@ dist/
 # Test coverage
 *.xccovreport
 *.xccovarchive
+
+# Local secrets/config
+.env
+.env.*
+*.pem
+*.p12
+*.mobileprovision

@@ -60,12 +60,7 @@ enum SelfTestRunner {
     }
 
     private static func testLimits() {
-        let input = String(repeating: "👨‍👩‍👧‍👦", count: 2_001)
-        let output = input.limitedWithNotice(to: 2_000)
-        check(output.count == 2_000, "output character limit")
-        check(output.hasSuffix("（内容已截断）"), "truncation notice")
-        check(String(repeating: "a", count: 1_000).count == AppConstants.maximumInputCharacters, "input character limit")
-        check(String(repeating: "字", count: 1_000).limitedWithNotice(to: AppConstants.maximumAIExplanationCharacters).count == 1_000, "AI explanation character limit")
+        check(String(repeating: "a", count: 2_000).count == AppConstants.maximumInputCharacters, "input character limit")
     }
 
     private static func testPinyin() {
@@ -139,13 +134,13 @@ enum SelfTestRunner {
         do {
             let configuration = AIConfiguration(provider: .opencode, baseURL: "https://opencode.ai/zen/go/v1", apiKey: "self-test", model: "deepseek-v4-flash", explanationPrompt: "Explain")
             let output = try await client.chat(configuration: configuration, systemPrompt: "System", userText: "Hello", maximumTokens: 12)
-            check(output.count == AppConstants.maximumOutputCharacters, "AI hard output limit")
+            check(output.count == 2500, "AI full output length preserved")
             check(SelfTestURLProtocol.capturedRequest?.url?.absoluteString == "https://opencode.ai/zen/go/v1/chat/completions", "OpenCode Go endpoint composition")
             if let body = SelfTestURLProtocol.capturedBody,
                let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
                 check(object["model"] as? String == "deepseek-v4-flash", "OpenCode Go model")
-                // OpenCode provider does not set thinking (unlike DeepSeek provider)
-                check(object["thinking"] == nil, "OpenCode Go should not set thinking parameter")
+                // All providers now send thinking: disabled to disable reasoning chains
+                check((object["thinking"] as? [String: String])?["type"] == "disabled", "All providers should send thinking: disabled")
                 check(object["max_tokens"] as? Int == 12, "request token cap")
             } else {
                 failures.append("AI request payload capture")

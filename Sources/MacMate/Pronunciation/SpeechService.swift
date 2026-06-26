@@ -5,6 +5,7 @@ import NaturalLanguage
 @MainActor
 final class SpeechService {
     private let synthesizer = AVSpeechSynthesizer()
+    private let languageRecognizer = NLLanguageRecognizer()
 
     var availableVoices: [(identifier: String, name: String)] {
         AVSpeechSynthesisVoice.speechVoices()
@@ -18,9 +19,8 @@ final class SpeechService {
         if !voiceIdentifier.isEmpty {
             utterance.voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier)
         } else {
-            let recognizer = NLLanguageRecognizer()
-            recognizer.processString(text)
-            switch recognizer.dominantLanguage {
+            languageRecognizer.processString(text)
+            switch languageRecognizer.dominantLanguage {
             case .simplifiedChinese: utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
             case .traditionalChinese: utterance.voice = AVSpeechSynthesisVoice(language: "zh-TW")
             case .english: utterance.voice = AVSpeechSynthesisVoice(language: "en-US")

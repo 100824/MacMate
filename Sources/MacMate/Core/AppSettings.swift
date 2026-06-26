@@ -24,7 +24,11 @@ final class AppSettings: ObservableObject {
         applyPresetIfNeeded(from: oldValue)
     }}
     @Published var baseURL: String { didSet { defaults.set(baseURL, forKey: Key.baseURL) } }
-    @Published var apiKey: String { didSet { _ = CredentialsStore.writeAPIKey(apiKey) } }
+    @Published var apiKey: String { didSet {
+        if !CredentialsStore.writeAPIKey(apiKey) {
+            FileLogger.shared.error(.app, "api_key_save_failed")
+        }
+    }}
     @Published var model: String { didSet { defaults.set(model, forKey: Key.model) } }
     @Published var explanationPrompt: String { didSet { defaults.set(explanationPrompt, forKey: Key.explanationPrompt) } }
     @Published var speechRate: Double { didSet { defaults.set(speechRate, forKey: Key.speechRate) } }
@@ -83,7 +87,7 @@ final class AppSettings: ObservableObject {
         }
 
         self.explanationPrompt = defaults.string(forKey: Key.explanationPrompt)
-            ?? "请用简体中文清晰解释这段内容，说明含义、上下文和必要的术语。回答不超过500个字符，可使用 Markdown 排版。"
+            ?? "请用简体中文清晰解释这段内容，说明含义、上下文和必要的术语。回答不超过300个字符，可使用 Markdown 排版。"
         if let storedRate = defaults.object(forKey: Key.speechRate) as? Double {
             self.speechRate = storedRate
         }

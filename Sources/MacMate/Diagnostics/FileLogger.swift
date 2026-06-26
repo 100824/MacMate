@@ -19,13 +19,24 @@ final class FileLogger: @unchecked Sendable {
     private let fileManager = FileManager.default
     private let maximumFileSize: UInt64 = 2 * 1_048_576
     private let maximumFiles = 5
+    private let logURL: URL
+    private var fileHandle: FileHandle?
 
     private init() {
+        logURL = AppConstants.logsDirectory.appendingPathComponent("macmate.log")
         try? fileManager.createDirectory(
             at: AppConstants.logsDirectory,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+        openFileHandle()
+    }
+
+    private func openFileHandle() {
+        if !fileManager.fileExists(atPath: logURL.path) {
+            fileManager.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        }
+        fileHandle = try? FileHandle(forWritingTo: logURL)
     }
 
     func info(_ category: LogCategory, _ message: String) {
@@ -42,14 +53,12 @@ final class FileLogger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         rotateIfNeeded()
+        if fileHandle == nil {
+            openFileHandle()
+        }
+        guard let handle = fileHandle else { return }
         let formatter = ISO8601DateFormatter()
         let line = "\(formatter.string(from: Date())) [\(level)] [\(category.rawValue)] \(sanitized)\n"
-        let url = AppConstants.logsDirectory.appendingPathComponent("macmate.log")
-        if !fileManager.fileExists(atPath: url.path) {
-            fileManager.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        }
-        guard let handle = try? FileHandle(forWritingTo: url) else { return }
-        defer { try? handle.close() }
         _ = try? handle.seekToEnd()
         try? handle.write(contentsOf: Data(line.utf8))
     }
@@ -65,6 +74,10 @@ final class FileLogger: @unchecked Sendable {
         guard let attributes = try? fileManager.attributesOfItem(atPath: active.path),
               let size = attributes[.size] as? UInt64,
               size >= maximumFileSize else { return }
+
+        // 旋转前关闭文件句柄
+        fileHandle?.closeFile()
+        fileHandle = nil
 
         let oldest = AppConstants.logsDirectory.appendingPathComponent("macmate.\(maximumFiles - 1).log")
         try? fileManager.removeItem(at: oldest)

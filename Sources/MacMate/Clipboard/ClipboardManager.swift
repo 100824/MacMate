@@ -51,6 +51,7 @@ final class ClipboardManager: ObservableObject {
 
     @discardableResult
     func paste(_ entry: ClipboardEntry, into targetApplication: NSRunningApplication?) -> Bool {
+        ClipboardCaptureGate.shared.suppress(for: 1.5)
         pasteboard.clearContents()
         var wroteContent = false
         if let text = entry.text {

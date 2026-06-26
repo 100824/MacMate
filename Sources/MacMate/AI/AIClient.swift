@@ -43,6 +43,7 @@ struct AIClient: Sendable {
         struct Choice: Decodable {
             struct ResponseMessage: Decodable {
                 let content: String?
+                let reasoning_content: String?
             }
             let message: ResponseMessage
         }
@@ -61,25 +62,16 @@ struct AIClient: Sendable {
         let error: ServiceError?
     }
 
-    private struct StreamChunk: Decodable {
-        struct Choice: Decodable {
-            struct Delta: Decodable { let content: String? }
-            let delta: Delta?
-        }
-        let choices: [Choice]?
-        let usage: Usage?
-
-        struct Usage: Decodable {
-            let total_tokens: Int?
-        }
-    }
-
     let session: URLSession
     let usageLimiter: AIUsageLimiter
 
     init(session: URLSession = .shared, usageLimiter: AIUsageLimiter = .shared) {
         self.session = session
         self.usageLimiter = usageLimiter
+    }
+
+    private func timeoutInterval(for text: String) -> TimeInterval {
+        60 + Double(text.count) / 200.0
     }
 
     func chat(
@@ -93,7 +85,7 @@ struct AIClient: Sendable {
         let endpoint = try endpointURL(from: configuration.baseURL)
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 60
+        request.timeoutInterval = timeoutInterval(for: userText)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !configuration.apiKey.isEmpty {
             request.setValue("Bearer \(configuration.apiKey)", forHTTPHeaderField: "Authorization")
@@ -104,7 +96,7 @@ struct AIClient: Sendable {
             temperature: 0.2,
             max_tokens: maximumTokens,
             stream: false,
-            thinking: configuration.provider == .deepseek ? .init(type: "disabled") : nil
+            thinking: .init(type: "disabled")
         ))
 
         do {
@@ -117,84 +109,20 @@ struct AIClient: Sendable {
                 throw AIClientError.http(status: http.statusCode, message: serviceMessage)
             }
             let decoded = try JSONDecoder().decode(ResponseBody.self, from: data)
-            guard let content = decoded.choices.first?.message.content?.nonEmptyTrimmed else {
+            let message = decoded.choices.first?.message
+            // 优先取 content；若模型返回了 reasoning_content 而 content 为空，则回退
+            let rawContent = message?.content?.nonEmptyTrimmed ?? message?.reasoning_content?.nonEmptyTrimmed
+            guard let content = rawContent else {
                 throw AIClientError.emptyResponse
             }
             usageLimiter.recordTokenUsage(decoded.usage?.total_tokens ?? 0)
-            let limited = content.limitedWithNotice(to: AppConstants.maximumOutputCharacters)
-            FileLogger.shared.info(.network, "request_succeeded input_chars=\(userText.count) output_chars=\(content.count) truncated=\(content.count > AppConstants.maximumOutputCharacters)")
-            return limited
+            FileLogger.shared.info(.network, "request_succeeded input_chars=\(userText.count) output_chars=\(content.count)")
+            return content
         } catch let error as AIClientError {
             throw error
         } catch {
             FileLogger.shared.error(.network, "transport_failed type=\(String(describing: type(of: error)))")
             throw AIClientError.transport(error.localizedDescription)
-        }
-    }
-
-    func chatStream(
-        configuration: AIConfiguration,
-        systemPrompt: String,
-        userText: String,
-        maximumTokens: Int = 2_000
-    ) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    guard configuration.isUsable else { throw AIClientError.invalidConfiguration }
-                    try usageLimiter.authorizeRequest()
-                    let endpoint = try endpointURL(from: configuration.baseURL)
-                    var request = URLRequest(url: endpoint)
-                    request.httpMethod = "POST"
-                    request.timeoutInterval = 120
-                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    if !configuration.apiKey.isEmpty {
-                        request.setValue("Bearer \(configuration.apiKey)", forHTTPHeaderField: "Authorization")
-                    }
-                    request.httpBody = try JSONEncoder().encode(RequestBody(
-                        model: configuration.model,
-                        messages: [Message(role: "system", content: systemPrompt), Message(role: "user", content: userText)],
-                        temperature: 0.2,
-                        max_tokens: maximumTokens,
-                        stream: true,
-                        thinking: configuration.provider == .deepseek ? .init(type: "disabled") : nil
-                    ))
-
-                    let (bytes, response) = try await session.bytes(for: request)
-                    guard let http = response as? HTTPURLResponse else { throw AIClientError.invalidResponse }
-                    guard (200..<300).contains(http.statusCode) else {
-                        var errorData = Data()
-                        for try await byte in bytes { errorData.append(byte) }
-                        let serviceMessage = (try? JSONDecoder().decode(ErrorBody.self, from: errorData).error?.message)
-                            ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
-                        throw AIClientError.http(status: http.statusCode, message: serviceMessage)
-                    }
-
-                    var totalTokens = 0
-                    for try await line in bytes.lines {
-                        guard !Task.isCancelled else { break }
-                        guard line.hasPrefix("data: ") else { continue }
-                        let json = String(line.dropFirst(6))
-                        guard json != "[DONE]" else { break }
-                        guard let data = json.data(using: .utf8),
-                              let chunk = try? JSONDecoder().decode(StreamChunk.self, from: data) else { continue }
-                        if let content = chunk.choices?.first?.delta?.content {
-                            continuation.yield(content)
-                        }
-                        if let usage = chunk.usage {
-                            totalTokens = usage.total_tokens ?? 0
-                        }
-                    }
-
-                    usageLimiter.recordTokenUsage(totalTokens)
-                    continuation.finish()
-                } catch is CancellationError {
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
@@ -215,7 +143,7 @@ struct AIClient: Sendable {
             temperature: 0.2,
             max_tokens: 8,
             stream: false,
-            thinking: configuration.provider == .deepseek ? .init(type: "disabled") : nil
+            thinking: .init(type: "disabled")
         ))
 
         let (data, response) = try await session.data(for: request)

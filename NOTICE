@@ -1,0 +1,8 @@
+# Notices
+
+MacMate includes the CMU Pronouncing Dictionary for offline English IPA lookup.
+The dictionary license is bundled at:
+
+`Sources/MacMate/Resources/Pronunciation/CMUdict-LICENSE.txt`
+
+MacMate's app icon and menu bar icon are project assets for this repository.

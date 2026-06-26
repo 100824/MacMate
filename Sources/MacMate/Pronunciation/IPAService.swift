@@ -8,25 +8,51 @@ struct IPAResult: Equatable {
 final class IPAService: @unchecked Sendable {
     static let shared = IPAService()
 
-    private let pronunciations: [String: [String]]
+    private var pronunciations: [String: [String]] = [:]
+    private let loadLock = NSLock()
+    private var isLoaded = false
+    private var loadTask: Task<Void, Never>?
     private let wordRegex = try! NSRegularExpression(pattern: #"[A-Za-z]+(?:'[A-Za-z]+)?"#)
 
-    init(dictionaryText: String? = nil) {
-        if let dictionaryText {
-            pronunciations = Self.parse(dictionaryText)
-        } else if let url = Bundle.main.url(forResource: "cmudict", withExtension: "dict")
-                    ?? Bundle.module.url(forResource: "cmudict", withExtension: "dict", subdirectory: "Pronunciation")
-                    ?? Bundle.module.url(forResource: "cmudict", withExtension: "dict"),
-                  let content = try? String(contentsOf: url, encoding: .utf8) {
-            pronunciations = Self.parse(content)
-            FileLogger.shared.info(.app, "pronunciation_dictionary_loaded entries=\(pronunciations.count)")
-        } else {
-            pronunciations = [:]
-            FileLogger.shared.error(.app, "pronunciation_dictionary_missing")
+    private init() {
+        // 在后台队列异步加载，避免阻塞主线程初始化
+        loadTask = Task.detached(priority: .userInitiated) { [weak self] in
+            self?.loadDictionary()
         }
     }
 
+    init(dictionaryText: String) {
+        pronunciations = Self.parse(dictionaryText)
+        isLoaded = true
+    }
+
+    private func loadDictionary() {
+        loadLock.lock()
+        defer { loadLock.unlock() }
+        guard !isLoaded else { return }
+
+        if let url = Bundle.main.url(forResource: "cmudict", withExtension: "dict")
+            ?? Bundle.module.url(forResource: "cmudict", withExtension: "dict", subdirectory: "Pronunciation")
+            ?? Bundle.module.url(forResource: "cmudict", withExtension: "dict"),
+           let content = try? String(contentsOf: url, encoding: .utf8) {
+            pronunciations = Self.parse(content)
+            FileLogger.shared.info(.app, "pronunciation_dictionary_loaded entries=\(pronunciations.count)")
+        } else {
+            FileLogger.shared.error(.app, "pronunciation_dictionary_missing")
+        }
+        isLoaded = true
+    }
+
     func transcribe(_ text: String) -> IPAResult {
+        // 如果词典还没加载完，先等待后台任务完成，避免重复加载。
+        // 等待在 continuation 上进行，不会阻塞当前线程的运行时调度，
+        // 但调用者仍会在完成前暂停；UI 调用应通过 async 包装避免卡顿。
+        if !isLoaded {
+            loadTask?.waitIfNeeded()
+        }
+
+        loadLock.lock()
+        defer { loadLock.unlock() }
         let nsText = text as NSString
         let matches = wordRegex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
         guard !matches.isEmpty else { return IPAResult(transcription: "", unknownWords: []) }
@@ -92,4 +118,18 @@ final class IPAService: @unchecked Sendable {
         "S": "s", "SH": "ʃ", "T": "t", "TH": "θ", "V": "v", "W": "w",
         "Y": "j", "Z": "z", "ZH": "ʒ"
     ]
+}
+
+private extension Task where Failure == Never {
+    /// 等待任务完成。用于在同步 API 内部阻塞当前线程直到后台加载完成。
+    /// 仅在非主线程调用；主线程调用可能造成卡顿。
+    func waitIfNeeded() {
+        // 使用条件锁等待任务完成，避免忙等。
+        let semaphore = DispatchSemaphore(value: 0)
+        Task<Void, Never> {
+            _ = await self.value
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
 }
