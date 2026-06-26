@@ -419,7 +419,7 @@ struct SettingsView: View {
                         progress: Double(tester.usage.tokenCount) / Double(max(tester.usage.dailyTokenLimit, 1))
                     )
 
-                    Text("每分钟最多 10 次；AI 解释最多显示 1000 字。")
+                    Text("每分钟最多 10 次；输入上限 \(AppConstants.maximumInputCharacters) 字。")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }

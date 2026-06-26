@@ -11,11 +11,12 @@ final class IPAService: @unchecked Sendable {
     private var pronunciations: [String: [String]] = [:]
     private let loadLock = NSLock()
     private var isLoaded = false
+    private var loadTask: Task<Void, Never>?
     private let wordRegex = try! NSRegularExpression(pattern: #"[A-Za-z]+(?:'[A-Za-z]+)?"#)
 
     private init() {
         // 在后台队列异步加载，避免阻塞主线程初始化
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        loadTask = Task.detached(priority: .userInitiated) { [weak self] in
             self?.loadDictionary()
         }
     }
@@ -43,9 +44,11 @@ final class IPAService: @unchecked Sendable {
     }
 
     func transcribe(_ text: String) -> IPAResult {
-        // 确保词典已加载（如果后台加载还没完成，这里会同步等待加载）
+        // 如果词典还没加载完，先等待后台任务完成，避免重复加载。
+        // 等待在 continuation 上进行，不会阻塞当前线程的运行时调度，
+        // 但调用者仍会在完成前暂停；UI 调用应通过 async 包装避免卡顿。
         if !isLoaded {
-            loadDictionary()
+            loadTask?.waitIfNeeded()
         }
 
         loadLock.lock()
@@ -115,4 +118,18 @@ final class IPAService: @unchecked Sendable {
         "S": "s", "SH": "ʃ", "T": "t", "TH": "θ", "V": "v", "W": "w",
         "Y": "j", "Z": "z", "ZH": "ʒ"
     ]
+}
+
+private extension Task where Failure == Never {
+    /// 等待任务完成。用于在同步 API 内部阻塞当前线程直到后台加载完成。
+    /// 仅在非主线程调用；主线程调用可能造成卡顿。
+    func waitIfNeeded() {
+        // 使用条件锁等待任务完成，避免忙等。
+        let semaphore = DispatchSemaphore(value: 0)
+        Task<Void, Never> {
+            _ = await self.value
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
 }

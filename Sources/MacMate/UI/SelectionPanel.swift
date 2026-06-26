@@ -81,32 +81,32 @@ final class SelectionPanelController {
         resultPanel.setFrame(frame, display: true, animate: true)
     }
 
+    private static let maxContentHeight: CGFloat = 280
+
     private func computePanelSize() -> NSSize {
         let hasPronunciation = !viewModel.pronunciationText.isEmpty
         let chromeHeight: CGFloat = hasPronunciation ? 192 : 140
-        let text = viewModel.resultText
 
         let contentHeight: CGFloat
         if viewModel.isLoading {
             contentHeight = 90
         } else if !viewModel.errorMessage.isEmpty {
             contentHeight = 70
-        } else if text.isEmpty {
+        } else if viewModel.resultText.isEmpty {
             contentHeight = 90
         } else {
-            // 混合文本宽度估算：中文字符按 2 倍宽度，ASCII 按 1 倍
-            let mixedWidth = text.reduce(0) { sum, char in
+            // 估算内容高度，但上限与 ScrollView maxHeight 一致
+            let mixedWidth = viewModel.resultText.reduce(0) { sum, char in
                 sum + (char.isASCII ? 1 : 2)
             }
             let lines = max(1, ceil(CGFloat(mixedWidth) / 50.0))
-            // 增加 Markdown heading 额外行数（heading 字号更大，占用更多空间）
-            let headingCount = text.components(separatedBy: .newlines).filter { line in
+            let headingCount = viewModel.resultText.components(separatedBy: .newlines).filter { line in
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 return trimmed.hasPrefix("#") && trimmed.dropFirst().hasPrefix(" ")
             }.count
             let totalLines = lines + CGFloat(headingCount)
             let estimated = totalLines * 20 + 40
-            contentHeight = min(estimated, Self.resultMaxHeight - chromeHeight)
+            contentHeight = min(estimated, Self.maxContentHeight)
         }
 
         let total = min(max(chromeHeight + contentHeight, Self.resultMinHeight), Self.resultMaxHeight)
@@ -173,6 +173,10 @@ final class SelectionPanelController {
             // 面板右侧超出屏幕，尝试放在锚点左侧
             x = anchorCenterX - size.width - 12
         }
+        // 如果反向放置后仍然超出屏幕，回退到居中裁剪，避免覆盖锚点。
+        if x < visible.minX + 8 || x + size.width > visible.maxX - 8 {
+            x = anchorCenterX - size.width / 2
+        }
         // 确保在可见区域内
         x = max(visible.minX + 8, min(x, visible.maxX - size.width - 8))
 
@@ -180,7 +184,7 @@ final class SelectionPanelController {
     }
 
     private static func makePanel(identifier: String, size: NSSize) -> NSPanel {
-        let panel = NSPanel(
+        let panel = MovablePanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
@@ -198,31 +202,68 @@ final class SelectionPanelController {
     }
 }
 
-// MARK: - Drag Modifier
+// MARK: - Movable Panel
 
-/// Drag gesture modifier that moves a panel when the user drags.
-/// Uses `minimumDistance: 3` so taps still pass through to child buttons.
-private struct PanelDragModifier: ViewModifier {
-    let panel: NSPanel?
-    @State private var dragStart: CGPoint?
+/// 自定义 NSPanel，在 sendEvent 层判断当前点击位置是否在交互控件上。
+/// 若不在（空白区域），则跟随鼠标移动窗口；若在（按钮、滚动视图等），则不触发拖拽。
+private final class MovablePanel: NSPanel {
+    private var isDragging = false
+    private var dragOrigin: NSPoint = .zero
+    private var frameOriginAtStart: NSPoint = .zero
 
-    func body(content: Content) -> some View {
-        content.simultaneousGesture(
-            DragGesture(minimumDistance: 3)
-                .onChanged { value in
-                    if dragStart == nil {
-                        dragStart = panel?.frame.origin
-                    }
-                    guard let start = dragStart, let panel = panel else { return }
-                    panel.setFrameOrigin(CGPoint(
-                        x: start.x + value.translation.width,
-                        y: start.y - value.translation.height
-                    ))
-                }
-                .onEnded { _ in
-                    dragStart = nil
-                }
-        )
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            if !isInteractiveView(at: event.locationInWindow) {
+                isDragging = true
+                // 使用屏幕绝对坐标，不受窗口自身移动影响
+                dragOrigin = NSEvent.mouseLocation
+                frameOriginAtStart = frame.origin
+            }
+            super.sendEvent(event)
+
+        case .leftMouseDragged where isDragging:
+            let mouse = NSEvent.mouseLocation
+            let dx = mouse.x - dragOrigin.x
+            let dy = mouse.y - dragOrigin.y
+            var newFrame = frame
+            newFrame.origin.x = frameOriginAtStart.x + dx
+            newFrame.origin.y = frameOriginAtStart.y + dy
+            setFrame(newFrame, display: false, animate: false)
+            // 不转发给 super，避免 SwiftUI 重复渲染导致卡顿。
+            // 点击交互控件时 isInteractiveView 返回 true，不会进入此分支，
+            // 因此 ScrollView 滚动 / 按钮点击不受影响。
+
+        case .leftMouseUp:
+            isDragging = false
+            super.sendEvent(event)
+
+        default:
+            super.sendEvent(event)
+        }
+    }
+
+    /// 检查指定坐标下方是否是一个可交互的 AppKit 控件。
+    /// NSButton / NSSlider / NSScrollView / NSTextView 及其子类视为交互控件；
+    /// 纯 NSView / NSHostingView 视为非交互区域。
+    private func isInteractiveView(at locationInWindow: NSPoint) -> Bool {
+        guard let contentView = contentView else { return false }
+        let point = contentView.convert(locationInWindow, from: nil)
+        guard let hit = contentView.hitTest(point) else { return false }
+
+        // 沿响应链向上查找，判断是否命中交互控件
+        var responder: NSResponder? = hit
+        while let current = responder {
+            if current is NSButton
+                || current is NSSlider
+                || current is NSScrollView
+                || current is NSTextView
+                || current is NSTextField {
+                return true
+            }
+            responder = current.nextResponder
+        }
+        return false
     }
 }
 
@@ -266,7 +307,6 @@ private struct SelectionToolbarView: View {
         .padding(10)
         .frame(width: 300, height: 52)
         .panelStyle(cornerRadius: 20)
-        .modifier(PanelDragModifier(panel: panel))
     }
 }
 
@@ -313,7 +353,6 @@ private struct SelectionResultView: View {
         .frame(width: 430)
         .fixedSize(horizontal: false, vertical: true)
         .panelStyle(cornerRadius: 20)
-        .modifier(PanelDragModifier(panel: panel))
         .background {
             if #available(macOS 15.0, *) {
                 SystemTranslationTaskHost(coordinator: viewModel.systemTranslationCoordinator)
@@ -429,6 +468,7 @@ private struct SelectionResultView: View {
                 MarkdownResultText(markdown: viewModel.resultText)
                     .padding(.top, 2)
             }
+            .frame(maxHeight: 280)
         }
     }
 
@@ -472,14 +512,6 @@ private struct SelectionResultView: View {
                         Text(viewModel.translationProvider)
                             .font(.system(size: 11))
                     }
-                    .foregroundStyle(.secondary)
-                } else if viewModel.activeAction == .explain {
-                    HStack(spacing: 4) {
-                        Image(systemName: "text.word.count")
-                            .font(.system(size: 10))
-                        Text("\(viewModel.explanationCharacterCount) / \(AppConstants.maximumAIExplanationCharacters) 字")
-                    }
-                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 }
             }

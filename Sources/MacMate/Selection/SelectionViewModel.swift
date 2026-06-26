@@ -45,14 +45,13 @@ final class SelectionViewModel: ObservableObject {
     }
 
     var exceedsInputLimit: Bool { selectedText.count > AppConstants.maximumInputCharacters }
-    var explanationCharacterCount: Int { activeAction == .explain ? resultText.count : 0 }
 
     func setSelection(_ selection: AccessibleSelection) {
         cancel()
         selectedText = selection.text
         anchorBounds = selection.appKitBounds
         resultText = ""
-        errorMessage = exceedsInputLimit ? "最多处理 1000 个字符，当前为 \(selectedText.count) 个字符。" : ""
+        errorMessage = exceedsInputLimit ? "最多处理 \(AppConstants.maximumInputCharacters) 个字符，当前为 \(selectedText.count) 个字符。" : ""
         activeAction = nil
         translationProvider = ""
         pronunciationText = ""
@@ -60,7 +59,7 @@ final class SelectionViewModel: ObservableObject {
 
     func perform(_ action: AssistantAction) {
         guard !exceedsInputLimit else {
-            errorMessage = "最多处理 1000 个字符，当前为 \(selectedText.count) 个字符。"
+            errorMessage = "最多处理 \(AppConstants.maximumInputCharacters) 个字符，当前为 \(selectedText.count) 个字符。"
             return
         }
         cancel()
@@ -213,7 +212,7 @@ final class SelectionViewModel: ObservableObject {
     private func aiTranslation(_ input: String, configuration: AIConfiguration) async throws -> String {
         return try await aiClient.chat(
             configuration: configuration,
-            systemPrompt: "将以下文本准确翻译成简体中文。只输出译文，不要解释，不要输出音标。",
+            systemPrompt: "将以下文本准确翻译成简体中文。先给出译文，然后用一句话简要说明核心含义或语境。不要输出音标。",
             userText: input
         )
     }
@@ -230,7 +229,7 @@ final class SelectionViewModel: ObservableObject {
         } else {
             combined = "### 译文\n\(translation)"
         }
-        return combined.limitedWithNotice(to: AppConstants.maximumOutputCharacters)
+        return combined
     }
 
     private static func translationLanguages(for text: String) -> (source: Locale.Language?, target: Locale.Language) {
